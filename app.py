@@ -2,9 +2,14 @@ from flask import Flask, render_template, request, redirect, session, flash, url
 import pymysql
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_mail import Mail, Message
+from dotenv import load_dotenv
+import os
+
+
 app = Flask(__name__)
 app.secret_key = "supersecretkey"
-
+load_dotenv()
+GEMINI_API_KEY = os.getenv("AIzaSyC92nVU5KQ-nZTi6GtHdYCanAvEmVr5i5o")
 app.config['MAIL_SERVER'] = 'smtp.gmail.com'
 app.config['MAIL_PORT'] = 587
 app.config['MAIL_USE_TLS'] = True
@@ -291,6 +296,78 @@ Message: {req['message']}
     return redirect(url_for("admin_dashboard"))
 
 
+import requests
+
+def recommend_donors_local(request_id, top_n=2):
+    req = get_request_by_id(request_id)
+    if not req:
+        return []
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    # SQL: rank donors by same city first, then others
+    cur.execute("""
+        SELECT id, name, email, blood_group, location
+        FROM users
+        WHERE blood_group=%s AND verified=1
+        ORDER BY CASE WHEN location=%s THEN 1 ELSE 2 END
+        LIMIT %s
+    """, (req['blood_group'], req['location'], top_n))
+
+    recommended = cur.fetchall()
+    cur.close()
+    conn.close()
+    return recommended
+
+
+@app.route("/recommend_donors/<int:req_id>")
+def recommend_donors(req_id):
+    recommendations = recommend_donors_local(req_id)
+    if not recommendations:
+        flash("No donors found for this request.", "warning")
+    # Pass req_id explicitly to the template
+    return render_template("recommendations.html", recommendations=recommendations, req_id=req_id)
+
+
+
+@app.route("/send_email_to_donor/<int:req_id>/<int:donor_id>")
+def send_email_to_donor(req_id, donor_id):
+    req = get_request_by_id(req_id)
+    if not req:
+        flash("Request not found.", "danger")
+        return redirect(url_for("recommend_donors", req_id=req_id))
+
+    # Get donor details
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM users WHERE id=%s AND verified=1", (donor_id,))
+    donor = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    if not donor:
+        flash("Donor not found or not verified.", "warning")
+        return redirect(url_for("recommend_donors", req_id=req_id))
+
+    subject = f"Urgent Blood Request: {req['blood_group']} Needed!"
+    body = f"""
+Hello {donor['name']},
+
+There is an urgent blood request matching your blood group.
+
+Patient: {req['requester_name']}
+Blood Group: {req['blood_group']}
+Location: {req['location']}
+Contact: {req['contact']}
+Message: {req['message']}
+
+Please reach out if you can donate.
+"""
+
+    send_email_alert(donor['email'], subject, body)
+    flash(f"Email sent to {donor['name']}!", "success")
+    return redirect(url_for("recommend_donors", req_id=req_id))
 
 
 if __name__ == "__main__":
