@@ -1,9 +1,17 @@
-from flask import Flask, render_template, request, redirect, session, flash
+from flask import Flask, render_template, request, redirect, session, flash, url_for
 import pymysql
 from werkzeug.security import generate_password_hash, check_password_hash
-
+from flask_mail import Mail, Message
 app = Flask(__name__)
 app.secret_key = "supersecretkey"
+
+app.config['MAIL_SERVER'] = 'smtp.gmail.com'
+app.config['MAIL_PORT'] = 587
+app.config['MAIL_USE_TLS'] = True
+app.config['MAIL_USERNAME'] = 'hamiz.afkhan@gmail.com'
+app.config['MAIL_PASSWORD'] = 'oxxl ugfb ykus jtih'  # Use App Password (not main password)
+
+mail = Mail(app)
 
 # MySQL connection
 def get_db_connection():
@@ -14,6 +22,20 @@ def get_db_connection():
         db="bloodfinder",
         cursorclass=pymysql.cursors.DictCursor
     )
+
+def get_request_by_id(req_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM blood_requests WHERE id=%s", (req_id,))
+    req = cur.fetchone()
+    cur.close()
+    conn.close()
+    return req
+
+def send_email_alert(to_email, subject, body):
+    msg = Message(subject, sender=app.config['MAIL_USERNAME'], recipients=[to_email])
+    msg.body = body
+    mail.send(msg)
 
 # ---------------- USER HOME ----------------
 @app.route('/')
@@ -129,7 +151,6 @@ def request_blood():
 
 # ---------- ADMIN LOGIN ----------
 @app.route('/admin/login', methods=["GET", "POST"])
-
 def admin_login():
     if request.method == "POST":
         username = request.form["username"]
@@ -147,45 +168,40 @@ def admin_login():
             session["admin_name"] = user["username"]
             flash("Login successful!", "success")
             return redirect("/admin/dashboard")
-
         else:
             flash("Invalid admin credentials", "danger")
     return render_template("admin_login.html")
-# def admin_login():
-#     if request.method == "POST":
-#         username = request.form["username"]
-#         password = request.form["password"]
-
-#         conn = get_db_connection()
-#         cur = conn.cursor()
-#         cur.execute("SELECT * FROM admins WHERE username=%s", (username,))
-#         admin = cur.fetchone()
-#         cur.close()
-#         conn.close()
-
-#         if admin and check_password_hash(admin["password"], password):
-#             session["admin_id"] = admin["id"]
-#             session["admin_name"] = admin["username"]
-#             return redirect("/admin/dashboard")
-#         else:
-#             flash("Invalid admin credentials", "danger")
-#     return render_template("admin_login.html")
 
 # ---------- ADMIN DASHBOARD ----------
 @app.route('/admin/dashboard')
 def admin_dashboard():
+    if "admin_id" not in session:
+        return redirect("/admin/login")
 
     conn = get_db_connection()
     cur = conn.cursor()
+
+    # Pending donors
     cur.execute("SELECT * FROM users WHERE verified=0")
     pending_donors = cur.fetchall()
 
-    cur.execute("SELECT * FROM blood_requests")
-    blood_requests = cur.fetchall()
+    # Pending blood requests
+    cur.execute("SELECT * FROM blood_requests WHERE approved=0")
+    pending_requests = cur.fetchall()
+
+    # Approved requests (history)
+    cur.execute("SELECT * FROM blood_requests WHERE approved=1")
+    approved_requests = cur.fetchall()
+
     cur.close()
     conn.close()
 
-    return render_template("admin_dashboard.html", donors=pending_donors, requests=blood_requests)
+    return render_template(
+        "admin_dashboard.html",
+        donors=pending_donors,
+        pending_requests=pending_requests,
+        approved_requests=approved_requests
+    )
 
 # ---------- VERIFY DONOR ----------
 @app.route('/admin/verify_donor/<int:user_id>')
@@ -216,6 +232,66 @@ def approve_request(request_id):
     conn.close()
     flash("Blood request approved successfully!", "success")
     return redirect("/admin/dashboard")
+
+# ---------- REJECT BLOOD REQUEST ----------
+@app.route('/admin/reject_request/<int:request_id>')
+def reject_request(request_id):
+    if "admin_id" not in session:
+        return redirect("/admin/login")
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM blood_requests WHERE id=%s", (request_id,))
+    conn.commit()
+    cur.close()
+    conn.close()
+    flash("Blood request rejected/removed.", "info")
+    return redirect("/admin/dashboard")
+
+
+@app.route("/send_alert/<int:req_id>")
+def send_alert(req_id):
+    req = get_request_by_id(req_id)
+    if not req:
+        flash("Request not found.", "danger")
+        return redirect(url_for("admin_dashboard"))
+
+    subject = f"EMERGENCY: {req['blood_group']} Blood Needed!"
+    body = f"""
+Urgent request for {req['blood_group']} blood.
+Patient: {req['requester_name']}
+Location: {req['location']}
+Contact: {req['contact']}
+Message: {req['message']}
+"""
+
+    # Fetch all verified donors with the required blood group
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT email FROM users WHERE blood_group=%s AND verified=1",
+        (req['blood_group'].strip(),)  # remove any spaces
+    )
+    donors = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    if not donors:
+        flash("No verified donors with that blood group found!", "warning")
+        return redirect(url_for("admin_dashboard"))
+
+    # Send email to each donor
+    print("Sending alert to the following emails:")
+    for donor in donors:
+        email = donor.get('email')
+        if email:
+            send_email_alert(email.strip(), subject, body)
+
+    flash(f"Emergency email alert sent to {len(donors)} donors!", "success")
+    return redirect(url_for("admin_dashboard"))
+
+
+
 
 if __name__ == "__main__":
     app.run(debug=True)
