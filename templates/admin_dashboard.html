@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Admin Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 p-8">
+  <div class="bg-white p-6 rounded shadow-md">
+    <h2 class="text-2xl font-bold mb-4">Welcome, Admin {{ session.admin_name }}</h2>
+
+    <h3 class="text-xl font-semibold mt-6">Pending Donors</h3>
+    {% if donors %}
+      <ul>
+        {% for donor in donors %}
+          <li class="border p-2 rounded mb-2">
+            <strong>{{ donor.name }}</strong> - {{ donor.blood_group }} ({{ donor.location }})<br>
+            Contact: {{ donor.contact }}<br>
+            <a href="/admin/verify_donor/{{ donor.id }}" class="bg-green-500 text-white px-2 py-1 rounded">Verify</a>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p>No pending donors.</p>
+    {% endif %}
+
+    <h3 class="text-xl font-semibold mt-6">Blood Requests</h3>
+    {% if requests %}
+      <ul>
+        {% for req in requests %}
+          <li class="border p-2 rounded mb-2">
+            <strong>{{ req.requester_name }}</strong> needs {{ req.blood_group }} <br>
+            Location: {{ req.location }} | Contact: {{ req.contact }} <br>
+            Message: {{ req.message }}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p>No blood requests.</p>
+    {% endif %}
+
+    <div class="mt-6">
+      <a href="/logout" class="bg-red-500 text-white px-4 py-2 rounded">Logout</a>
+    </div>
+  </div>
+</body>
+</html>
